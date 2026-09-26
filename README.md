@@ -1,116 +1,108 @@
 # Bocchity — Fabric 1.21.1 + Polymer
 
-Это **не пиксель-арт-генератор**.
-
-Проект делает ровно следующее:
+Bocchity turns every image in `images/` into **one custom Polymer cube block** at build time.
 
 ```text
 images/nijika.png
-        ↓ gradlew build
-bocchity:nijika
-        ↓
-обычный куб-блок
-        ↓
-все 6 граней используют ОДНУ И ТУ ЖЕ исходную картинку
+       │
+       └── Gradle build
+                │
+                ▼
+        bocchity:nijika
+                │
+                ▼
+        one normal 1×1×1 cube
+        same image on all 6 faces
 ```
 
-## Что положить в проект
+The image is **not** converted into pixels and it is **not** used to create a wall of blocks.
 
-Картинки кладутся сюда:
+## Add images
+
+Put `.png`, `.jpg`, or `.jpeg` files into:
 
 ```text
 images/
 ```
 
-Например:
+For example:
 
 ```text
 images/
 ├── nijika.png
-├── bocchi.png
-└── ryo.png
+├── bocchi.jpg
+└── ryo.jpeg
 ```
 
-При `build` генератор:
+One input image produces one block with the same base name:
 
-1. копирует исходные изображения в resource pack мода без изменения;
-2. генерирует blockstate;
-3. генерирует `cube_all` block model;
-4. генерирует item model;
-5. генерирует Java-код регистрации именно тех блоков, которые есть в `images/`.
-
-Никаких скриптов, читающих PNG во время игры, нет.
-
-## Сборка
-
-Minecraft 1.21.1 для проекта собран под **Java 21**.
-
-На Windows:
-
-```powershell
-gradlew.bat build
+```text
+nijika.png  →  bocchity:nijika
+bocchi.jpg  →  bocchity:bocchi
+ryo.jpeg    →  bocchity:ryo
 ```
 
-В Linux/macOS:
+The build generates the blockstate, `cube_all` model, item model, translation, block registration source, and texture.
+
+PNG files are copied without re-encoding. JPG/JPEG files are decoded and converted to a valid PNG texture because Minecraft expects the generated texture file to actually be PNG.
+
+## Local build
+
+This project targets Minecraft **1.21.1** and Java **21**.
+
+Install Gradle 8.10.2 locally and run:
 
 ```bash
-./gradlew build
+gradle clean build
 ```
 
-Готовый мод будет в:
+On Windows the same command is:
+
+```powershell
+gradle clean build
+```
+
+The generated JAR is:
 
 ```text
 build/libs/bocchity-1.0.0.jar
 ```
 
-## Использование на сервере
+The project intentionally does not require a local PNG-reading step at runtime: image processing happens only during the Gradle build.
 
-Положи JAR в `server/mods/`.
+## In Minecraft
 
-После запуска сервер зарегистрирует блоки. Polymer Textured Blocks использует серверный resource pack, поэтому клиенту нужен ресурс-пак Polymer; это позволяет клиентам без самого Bocchity видеть текстуры блоков. Polymer документирует `FULL_BLOCK` как тип для полноразмерных непрозрачных блоков и требует активного server resource pack для Textured Blocks.
+Put the JAR into the server's `mods/` directory.
 
-Получить блок:
+For `images/nijika.png`, the item is:
 
 ```mcfunction
 /give @s bocchity:nijika
 ```
 
-После этого предмет можно поставить как обычный блок.
+Place it like any normal full cube.
 
-Если картинка называется `bocchi.png`, команда будет:
+The block uses a Polymer `FULL_BLOCK` representation. Polymer documents `FULL_BLOCK` as the full-collision, opaque textured-block type; textured blocks require the Polymer server resource pack to render correctly. The mod registers its assets with Polymer and marks the pack as required.
 
-```mcfunction
-/give @s bocchity:bocchi
-```
-
-Блок попадает в творческий инвентарь во вкладку Building Blocks.
-
-## Важно про картинку
-
-Картинка не режется на части и не раскладывается по нескольким блокам.
-
-Она является **одной текстурой куба** и применяется через `minecraft:block/cube_all` к `up`, `down`, `north`, `south`, `west` и `east`.
-
-Поэтому квадратная картинка обычно выглядит наиболее предсказуемо. Если изображение прямоугольное, Minecraft растянет всю текстуру на квадратную грань блока.
-
-Также `FULL_BLOCK` предназначен для непрозрачных кубов; прозрачность PNG не превращает блок в плоскость или стекло.
+The block item is also handled through Polymer custom model data so a vanilla client sees the generated cube model in inventory/hand instead of merely seeing the fallback Barrier icon.
 
 ## GitHub Actions
 
-The repository includes `.github/workflows/build.yml`.
+`.github/workflows/build.yml` does the following on every push to `main`:
 
-On every push to `main` it:
+1. installs Java 21;
+2. installs Gradle 8.10.2;
+3. runs the existing build-time image generator as part of `gradle clean build`;
+4. verifies the generated resource tree and resulting JAR;
+5. uploads `bocchity.jar` as a GitHub Actions artifact;
+6. replaces the prerelease tagged `latest` with the new JAR.
 
-1. installs Java 21 and Gradle 8.10.2;
-2. runs the existing `generateBocchity` build-time compiler as part of `gradle build`;
-3. produces `bocchity.jar`;
-4. uploads the JAR as a GitHub Actions artifact;
-5. replaces the `latest` pre-release with the newest JAR.
+Pull requests also run the complete build, but do not publish the `latest` release.
 
-The direct release asset URL after pushing the repository to GitHub is:
+Once the repository is on GitHub, the release asset has this stable URL:
 
 ```text
 https://github.com/OWNER/REPOSITORY/releases/download/latest/bocchity.jar
 ```
 
-Replace `OWNER/REPOSITORY` with the actual GitHub repository path.
+Replace `OWNER/REPOSITORY` with the actual repository path.
