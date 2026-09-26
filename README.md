@@ -17,6 +17,20 @@ images/nijika.png
 
 The image is **not** converted into pixels and it is **not** used to create a wall of blocks.
 
+## Transparency
+
+For PNG files, Bocchity scans the decoded pixels during the build.
+
+- A fully opaque image uses Polymer `FULL_BLOCK`.
+- If at least one pixel has alpha `< 255`, the block uses Polymer `TRANSPARENT_BLOCK` and the server block is marked `nonOpaque()`.
+- The original PNG bytes are preserved, so an existing transparent background stays transparent.
+- Transparent image blocks still have the normal full `1×1×1` block collision on the server.
+- Because Minecraft lighting is calculated per block rather than per texture pixel, the entire transparent image block is non-opaque: light can continue through consecutive transparent image blocks instead of stopping at the first one.
+
+Polymer documents `FULL_BLOCK` as not supporting transparency and `TRANSPARENT_BLOCK` as the block type for cutout textures. 
+
+JPG/JPEG inputs do not contain alpha and therefore remain normal opaque blocks after conversion to PNG.
+
 ## Add images
 
 Put `.png`, `.jpg`, or `.jpeg` files into:
@@ -82,9 +96,7 @@ For `images/nijika.png`, the item is:
 
 Place it like any normal full cube.
 
-The block uses a Polymer `FULL_BLOCK` representation. Polymer documents `FULL_BLOCK` as the full-collision, opaque textured-block type; textured blocks require the Polymer server resource pack to render correctly. The mod registers its assets with Polymer and marks the pack as required.
-
-The block item is also handled through Polymer custom model data so a vanilla client sees the generated cube model in inventory/hand instead of merely seeing the fallback Barrier icon.
+For a PNG with transparent pixels, the alpha background is cut out visually while the block keeps full cube collision. Transparent blocks also allow light to pass through consecutive blocks.
 
 ## GitHub Actions
 

@@ -88,21 +88,38 @@ tasks.register('generateBocchity') {
             }
 
             File textureFile = new File(textures, "${id}.png")
+            BufferedImage bufferedImage
             if (lower.endsWith('.png')) {
                 // Keep PNG input bytes untouched so the original texture is preserved.
                 java.nio.file.Files.copy(input.toPath(), textureFile.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
-                if (javax.imageio.ImageIO.read(textureFile) == null) {
+                bufferedImage = javax.imageio.ImageIO.read(textureFile)
+                if (bufferedImage == null) {
                     throw new GradleException("Could not decode PNG image '${input.name}'.")
                 }
             } else {
                 // JPG/JPEG has no alpha channel and cannot be copied under a .png name.
                 // Decode it and explicitly encode a real PNG for Minecraft.
-                BufferedImage bufferedImage = javax.imageio.ImageIO.read(input)
+                bufferedImage = javax.imageio.ImageIO.read(input)
                 if (bufferedImage == null) {
                     throw new GradleException("Could not decode image '${input.name}'. Supported formats: PNG, JPG, JPEG.")
                 }
                 if (!javax.imageio.ImageIO.write(bufferedImage, 'png', textureFile)) {
                     throw new GradleException("Could not encode PNG texture for '${input.name}'.")
+                }
+            }
+
+            // Detect actual alpha, not merely the presence of an alpha-capable PNG format.
+            // Minecraft lighting is per block, so a transparent image block is made non-opaque
+            // as a whole. Polymer TRANSPARENT_BLOCK is then used so alpha=0 pixels are cut out
+            // visually, including when transparent image blocks are placed next to each other.
+            boolean hasTransparency = false
+            outer:
+            for (int y = 0; y < bufferedImage.getHeight(); y++) {
+                for (int x = 0; x < bufferedImage.getWidth(); x++) {
+                    if (((bufferedImage.getRGB(x, y) >>> 24) & 0xFF) < 255) {
+                        hasTransparency = true
+                        break outer
+                    }
                 }
             }
 
@@ -137,7 +154,7 @@ tasks.register('generateBocchity') {
                     .collect { it.substring(0, 1).toUpperCase(Locale.ROOT) + it.substring(1).toLowerCase(Locale.ROOT) }
                     .join(' ')
 
-            images << [id: id, name: displayName ?: id]
+            images << [id: id, name: displayName ?: id, transparent: hasTransparency]
         }
 
         Map<String, String> translations = [:]
@@ -157,7 +174,8 @@ tasks.register('generateBocchity') {
         source.append('import net.minecraft.registry.Registry;\n')
         source.append('import net.minecraft.util.Identifier;\n')
         source.append('import java.util.ArrayList;\n')
-        source.append('import java.util.List;\n\n')
+        source.append('import java.util.List;\n')
+        source.append('\n')
         source.append('public final class GeneratedBocchityBlocks {\n')
         source.append('    private static final List<Block> BLOCKS = new ArrayList<>();\n\n')
         source.append('    private GeneratedBocchityBlocks() {}\n\n')
@@ -166,14 +184,14 @@ tasks.register('generateBocchity') {
         images.sort { a, b -> a.id <=> b.id }
         images.each { image ->
             String escaped = image.id.replace('\\', '\\\\').replace('"', '\\"')
-            source.append('        registerImage("').append(escaped).append('");\n')
+            source.append('        registerImage("').append(escaped).append('", ').append(image.transparent ? 'true' : 'false').append(');\n')
         }
 
         source.append('    }\n\n')
-        source.append('    private static void registerImage(String path) {\n')
+        source.append('    private static void registerImage(String path, boolean transparent) {\n')
         source.append('        Identifier id = Identifier.of(BocchityMod.MOD_ID, path);\n')
         source.append('        ImageBlock block = Registry.register(Registries.BLOCK, id, new ImageBlock(\n')
-        source.append('                AbstractBlock.Settings.copy(Blocks.WHITE_WOOL), id));\n')
+        source.append('                AbstractBlock.Settings.copy(Blocks.WHITE_WOOL), id, transparent));\n')
         source.append('        Item item = Registry.register(Registries.ITEM, id, new ImageBlockItem(block, id));\n')
         source.append('        ItemGroupEvents.modifyEntriesEvent(ItemGroups.BUILDING_BLOCKS).register(entries -> entries.add(item));\n')
         source.append('        BLOCKS.add(block);\n')
