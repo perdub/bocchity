@@ -113,15 +113,14 @@ tasks.register('generateBocchity') {
             // as a whole. Polymer TRANSPARENT_BLOCK is then used so alpha=0 pixels are cut out
             // visually, including when transparent image blocks are placed next to each other.
             boolean hasTransparency = false
-            outer:
-            for (int y = 0; y < bufferedImage.getHeight(); y++) {
-                for (int x = 0; x < bufferedImage.getWidth(); x++) {
-                    if (((bufferedImage.getRGB(x, y) >>> 24) & 0xFF) < 255) {
-                        hasTransparency = true
-                        break outer
-                    }
+            int height = bufferedImage.getHeight()
+            int width = bufferedImage.getWidth()
+            boolean foundTransparency = (0..<height).any { y ->
+                (0..<width).any { x ->
+                    (((bufferedImage.getRGB(x, y) >>> 24) & 0xFF) < 255)
                 }
             }
+            hasTransparency = foundTransparency
 
             // cube_all means exactly the same texture is used on every face.
             new File(blockModels, "${id}.json").setText(JsonOutput.prettyPrint(JsonOutput.toJson([
