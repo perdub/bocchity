@@ -298,3 +298,9 @@ java {
     }
     withSourcesJar()
 }
+
+// Gradle 8.x validates task dependencies strictly. The generated source/resource
+// directories are consumed by sourcesJar, so make the relationship explicit.
+tasks.named('sourcesJar') {
+    dependsOn(tasks.named('generateBocchity'))
+}
