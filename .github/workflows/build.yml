@@ -1,0 +1,63 @@
+name: Build Bocchity
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build mod
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Java 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Build JAR
+        run: gradle clean build --no-daemon
+
+      - name: Prepare downloadable JAR
+        shell: bash
+        run: |
+          set -euo pipefail
+          jar_path="$(find build/libs -maxdepth 1 -type f -name 'bocchity-*.jar' ! -name '*-sources.jar' | head -n 1)"
+          test -n "$jar_path"
+          cp "$jar_path" bocchity.jar
+          echo "Built: $jar_path"
+
+      - name: Upload JAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bocchity-jar
+          path: bocchity.jar
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish latest GitHub Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release delete latest --yes --cleanup-tag 2>/dev/null || true
+          gh release create latest bocchity.jar \
+            --title "Bocchity latest build" \
+            --notes "Automatic build from commit $GITHUB_SHA." \
+            --prerelease \
+            --target "$GITHUB_SHA"
