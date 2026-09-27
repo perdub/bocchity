@@ -172,7 +172,7 @@ tasks.register('generateBocchity') {
                     throw new GradleException("Duplicate block id '${id}'. Names must be unique across images/full_blocks, images/transparent and images/sphere.")
                 }
 
-                BufferedImage bufferedImage = javax.imageio.ImageIO.read(input)
+                java.awt.image.BufferedImage bufferedImage = javax.imageio.ImageIO.read(input)
                 if (bufferedImage == null) {
                     throw new GradleException("Could not decode image '${input}'. Supported formats: PNG, JPG, JPEG.")
                 }
@@ -225,24 +225,28 @@ tasks.register('generateBocchity') {
 
         Map<String, String> translations = [:]
         images.each { image -> translations["block.bocchity.${image.id}"] = image.name }
+        translations['itemGroup.bocchity.bocchity'] = 'Bocchity'
         new File(lang, 'en_us.json').setText(JsonOutput.prettyPrint(JsonOutput.toJson(translations)), 'UTF-8')
 
         StringBuilder source = new StringBuilder()
         source.append('package rocks.nijika.bocchity;\n\n')
-        source.append('import net.fabricmc.fabric.api.itemgroup.v1.ItemGroupEvents;\n')
+        source.append('import eu.pb4.polymer.core.api.item.PolymerItemGroupUtils;\n')
         source.append('import net.minecraft.block.AbstractBlock;\n')
         source.append('import net.minecraft.block.Block;\n')
         source.append('import net.minecraft.block.Blocks;\n')
         source.append('import net.minecraft.item.Item;\n')
-        source.append('import net.minecraft.item.ItemGroups;\n')
+        source.append('import net.minecraft.item.ItemGroup;\n')
+        source.append('import net.minecraft.item.ItemStack;\n')
         source.append('import net.minecraft.registry.Registries;\n')
         source.append('import net.minecraft.registry.Registry;\n')
+        source.append('import net.minecraft.text.Text;\n')
         source.append('import net.minecraft.util.Identifier;\n')
         source.append('import java.util.ArrayList;\n')
         source.append('import java.util.List;\n')
         source.append('\n')
         source.append('public final class GeneratedBocchityBlocks {\n')
-        source.append('    private static final List<Block> BLOCKS = new ArrayList<>();\n\n')
+        source.append('    private static final List<Block> BLOCKS = new ArrayList<>();\n')
+        source.append('    private static final List<Item> ITEMS = new ArrayList<>();\n\n')
         source.append('    private GeneratedBocchityBlocks() {}\n\n')
         source.append('    public static void register() {\n')
 
@@ -253,13 +257,29 @@ tasks.register('generateBocchity') {
             source.append('        registerImage("').append(escaped).append('", "').append(kindEscaped).append('", ').append(image.transparent ? 'true' : 'false').append(');\n')
         }
 
+        source.append('        registerItemGroup();\n')
+        source.append('    }\n\n')
+        source.append('    private static void registerItemGroup() {\n')
+        source.append('        if (ITEMS.isEmpty()) return;\n')
+        source.append('        Item firstItem = ITEMS.get(0);\n')
+        source.append('        ItemGroup group = PolymerItemGroupUtils.builder()\n')
+        source.append('                .displayName(Text.translatable("itemGroup.bocchity.bocchity"))\n')
+        source.append('                .icon(() -> new ItemStack(firstItem))\n')
+        source.append('                .entries((displayContext, entries) -> {\n')
+        source.append('                    for (Item item : ITEMS) {\n')
+        source.append('                        entries.add(item);\n')
+        source.append('                    }\n')
+        source.append('                })\n')
+        source.append('                .build();\n')
+        source.append('        PolymerItemGroupUtils.registerPolymerItemGroup(\n')
+        source.append('                Identifier.of(BocchityMod.MOD_ID, "bocchity"), group);\n')
         source.append('    }\n\n')
         source.append('    private static void registerImage(String path, String kind, boolean transparent) {\n')
         source.append('        Identifier id = Identifier.of(BocchityMod.MOD_ID, path);\n')
         source.append('        AbstractBlock.Settings settings = AbstractBlock.Settings.copy(Blocks.WHITE_WOOL);\n')
         source.append('        ImageBlock block = Registry.register(Registries.BLOCK, id, new ImageBlock(settings, id, kind, transparent));\n')
         source.append('        Item item = Registry.register(Registries.ITEM, id, new ImageBlockItem(block, id));\n')
-        source.append('        ItemGroupEvents.modifyEntriesEvent(ItemGroups.BUILDING_BLOCKS).register(entries -> entries.add(item));\n')
+        source.append('        ITEMS.add(item);\n')
         source.append('        BLOCKS.add(block);\n')
         source.append('    }\n\n')
         source.append('    public static List<Block> all() {\n')

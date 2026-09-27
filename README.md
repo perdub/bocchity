@@ -90,3 +90,8 @@ Stable latest-download URL:
 ```text
 https://github.com/OWNER/REPOSITORY/releases/download/latest/bocchity.jar
 ```
+
+
+### Polymer Creative tab
+
+Generated items are registered into a dedicated server-side Polymer creative tab named `Bocchity`. Open it with `/polymer creative` (without relying on command argument autocomplete). The tab is generated automatically from all images in `images/full_blocks`, `images/transparent`, and `images/sphere`.
