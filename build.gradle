@@ -380,17 +380,17 @@ tasks.named('build') {
     dependsOn(tasks.named('verifyBocchityGeneration'))
 }
 
-tasks.named('sourcesJar') {
-    dependsOn(tasks.named('generateBocchity'))
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+    withSourcesJar()
 }
 
 tasks.withType(JavaCompile).configureEach {
     options.release = 21
 }
 
-java {
-    toolchain {
-        languageVersion = JavaLanguageVersion.of(21)
-    }
-    withSourcesJar()
+tasks.named('sourcesJar') {
+    dependsOn(tasks.named('generateBocchity'))
 }
