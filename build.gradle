@@ -79,6 +79,13 @@ def imageFiles = { File folder ->
     return result.sort { a, b -> a.path <=> b.path }
 }
 
+// Helper is a real Groovy script method so closures can call it reliably
+// even during Gradle script evaluation.
+double roundModelNumber(double value) {
+    double rounded = Math.round(value * 1000.0d) / 1000.0d
+    return Math.abs(rounded - Math.rint(rounded)) < 0.000001d ? (int) Math.rint(rounded) : rounded
+}
+
 def sphereModel = { String textureId ->
     // Vanilla block models are made from cuboids. A 16x16x16 voxelized sphere
     // is a practical server-side approximation while keeping a normal block
@@ -130,12 +137,6 @@ def sphereModel = { String textureId ->
     ]
 }
 
-// Keep model coordinates readable in generated JSON while avoiding floating
-// point noise from the sphere calculations.
-def roundModelNumber = { double value ->
-    double rounded = Math.round(value * 1000.0d) / 1000.0d
-    return Math.abs(rounded - Math.rint(rounded)) < 0.000001d ? (int) Math.rint(rounded) : rounded
-}
 
 tasks.register('generateBocchity') {
     inputs.dir(imageRoot)
