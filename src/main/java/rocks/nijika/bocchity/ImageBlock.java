@@ -10,17 +10,15 @@ import net.minecraft.block.BlockState;
 import net.minecraft.util.Identifier;
 
 /**
- * A normal full-collision server block rendered through Polymer.
+ * A normal server block with a full 1x1x1 collision box.
  *
- * Opaque images use FULL_BLOCK. Images containing transparent pixels use
- * TRANSPARENT_BLOCK + nonOpaque(). The server-side block still has the normal
- * full cube collision shape, while Polymer uses a transparent client-side
- * representation that supports cutout alpha and light passing through it.
+ * The client-side appearance is supplied by Polymer. Sphere blocks are still
+ * full blocks on the server; only their client-side model is rounded.
  */
 public final class ImageBlock extends Block implements PolymerTexturedBlock {
     private final BlockState polymerState;
 
-    public ImageBlock(AbstractBlock.Settings settings, Identifier id, boolean transparent) {
+    public ImageBlock(AbstractBlock.Settings settings, Identifier id, String kind, boolean transparent) {
         super(transparent ? settings.nonOpaque() : settings);
 
         BlockModelType type = transparent
@@ -33,7 +31,7 @@ public final class ImageBlock extends Block implements PolymerTexturedBlock {
         );
 
         if (this.polymerState == null) {
-            throw new IllegalStateException("No Polymer " + type + " state available for " + id);
+            throw new IllegalStateException("No Polymer " + type + " state available for " + id + " (kind=" + kind + ")");
         }
     }
 

@@ -1,35 +1,43 @@
-# Картинки для блоков
+# Bocchity image folders
 
-Положи сюда `.png`, `.jpg` или `.jpeg`.
-
-Каждая картинка создаёт **ОДИН отдельный куб-блок**.
-
-Например:
+Put images into one of these folders. The folder determines the generated block type — no config file is needed.
 
 ```text
 images/
-├── nijika.png
-└── bocchi.png
+├── full_blocks/
+├── transparent/
+└── sphere/
 ```
 
-даст:
+Supported input formats: PNG, JPG and JPEG.
+
+## `full_blocks`
+
+A normal full `1×1×1` cube. The image is the texture on all six faces.
 
 ```text
-/bocchity:nijika
-/bocchity:bocchi
+images/full_blocks/nijika.png
+→ bocchity:nijika
 ```
 
-Внешний вид блока использует **исходную картинку целиком на всех шести гранях**.
+## `transparent`
 
-`cube_all` не режет картинку на пиксели и не превращает её в пиксель-арт.
-
-Имя файла должно использовать только `a-z`, `0-9`, `_` и `-` для надёжного ID Minecraft.
-
-Примеры:
+A full `1×1×1` cube with Polymer cutout transparency. Use a PNG with an alpha channel for the background you want to remove. The server-side collision remains a full cube.
 
 ```text
-nijika.png       -> bocchity:nijika
-my_picture.png   -> bocchity:my_picture
+images/transparent/logo.png
+→ bocchity:logo
 ```
 
-После изменения картинок снова запускай `gradlew build`.
+## `sphere`
+
+A full `1×1×1` collision block whose client-side model is generated as a rounded voxel sphere. The sphere model uses the image as its texture. If the PNG contains alpha, Polymer's transparent block type is used automatically so transparent pixels remain cut out.
+
+Minecraft vanilla block models are cuboid-based, so the generated sphere is an approximation made from many small cuboid elements rather than a mathematically smooth mesh.
+
+```text
+images/sphere/ball.png
+→ bocchity:ball
+```
+
+Names are taken from the filename and normalized to a valid Minecraft ID. IDs must be unique across all three folders.

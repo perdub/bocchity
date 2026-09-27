@@ -1,5 +1,5 @@
+import groovy.io.FileType
 import groovy.json.JsonOutput
-import java.awt.image.BufferedImage
 
 plugins {
     id 'fabric-loom' version "${loom_version}"
@@ -29,25 +29,116 @@ dependencies {
 }
 
 // -----------------------------------------------------------------------------
-// Build-time image -> custom block compiler
+// Build-time image compiler
 // -----------------------------------------------------------------------------
-// Put PNG/JPG/JPEG files in images/.
-// For every image this task generates:
-//   - a real registered Minecraft block + BlockItem
-//   - a cube_all block model (same image on all 6 faces)
-//   - blockstate + item model + translation
-//   - the original image as the block texture
-//   - Java registration source containing the exact set of blocks
+// Image type is selected by directory, so no extra config file is needed:
+//   images/full_blocks/*.png   -> opaque cube, same texture on all 6 faces
+//   images/transparent/*.png   -> cube with cutout transparency
+//   images/sphere/*.png        -> rounded voxel-sphere model with full hitbox
 //
-// Nothing scans the images/ directory at runtime. The image is an ordinary
-// asset inside the finished JAR.
+// Each image becomes exactly one registered block + BlockItem. Images are read
+// only during the Gradle build and are embedded into the resulting JAR.
 
-def imageDir = file('images')
+def imageRoot = file('images')
+def imageCategories = [
+        [name: 'full_blocks', folder: new File(imageRoot, 'full_blocks')],
+        [name: 'transparent', folder: new File(imageRoot, 'transparent')],
+        [name: 'sphere', folder: new File(imageRoot, 'sphere')]
+]
 def generatedResourcesDir = layout.buildDirectory.dir('generated/bocchity-resources')
 def generatedSourcesDir = layout.buildDirectory.dir('generated/bocchity-sources')
 
+def normalizeBlockId = { String rawName ->
+    String id = rawName.toLowerCase(Locale.ROOT).replaceAll('[^a-z0-9_-]+', '_')
+    id = id.replaceAll('_+', '_').replaceAll('^-+|_+$', '')
+    if (!id) id = 'image'
+    if (!id.matches('[a-z0-9][a-z0-9_-]*')) id = 'image_' + id
+    return id
+}
+
+def displayNameFor = { String rawName ->
+    String value = rawName.replaceAll('[_-]+', ' ')
+            .replaceAll('([a-z])([A-Z])', '$1 $2')
+            .trim()
+    if (!value) return rawName
+    return value.split(/\s+/)
+            .findAll { !it.isEmpty() }
+            .collect { it.substring(0, 1).toUpperCase(Locale.ROOT) + it.substring(1).toLowerCase(Locale.ROOT) }
+            .join(' ')
+}
+
+def imageFiles = { File folder ->
+    if (!folder.exists()) return []
+    def result = []
+    folder.eachFileRecurse(FileType.FILES) { File file ->
+        String lower = file.name.toLowerCase(Locale.ROOT)
+        if (lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg')) {
+            result << file
+        }
+    }
+    return result.sort { a, b -> a.path <=> b.path }
+}
+
+def sphereModel = { String textureId ->
+    // Vanilla block models are made from cuboids. A 16x16x16 voxelized sphere
+    // is a practical server-side approximation while keeping a normal block
+    // collision box. Each small slice is merged along X into one cuboid.
+    int resolution = 16
+    double center = 8.0d
+    double radius = 8.0d
+    List<Map<String, Object>> elements = []
+
+    for (int yi = 0; yi < resolution; yi++) {
+        double y0 = 16.0d * yi / resolution
+        double y1 = 16.0d * (yi + 1) / resolution
+        double yc = (y0 + y1) / 2.0d
+        double dy = (yc - center) / radius
+        double radial = Math.sqrt(Math.max(0.0d, 1.0d - dy * dy)) * radius
+        if (radial <= 0.01d) continue
+
+        for (int zi = 0; zi < resolution; zi++) {
+            double z0 = 16.0d * zi / resolution
+            double z1 = 16.0d * (zi + 1) / resolution
+            double zc = (z0 + z1) / 2.0d
+            double dz = (zc - center) / Math.max(radial, 0.0001d)
+            if (Math.abs(dz) > 1.0d) continue
+
+            double halfX = Math.sqrt(Math.max(0.0d, 1.0d - dz * dz)) * radial
+            if (halfX <= 0.01d) continue
+
+            double x0 = center - halfX
+            double x1 = center + halfX
+            elements << [
+                    from: [roundModelNumber(x0), roundModelNumber(y0), roundModelNumber(z0)],
+                    to:   [roundModelNumber(x1), roundModelNumber(y1), roundModelNumber(z1)],
+                    faces: [
+                            down:  [texture: '#all'],
+                            up:    [texture: '#all'],
+                            north: [texture: '#all'],
+                            south: [texture: '#all'],
+                            west:  [texture: '#all'],
+                            east:  [texture: '#all']
+                    ]
+            ]
+        }
+    }
+
+    return [
+            ambientocclusion: true,
+            textures: [all: "bocchity:block/${textureId}"],
+            elements: elements
+    ]
+}
+
+// Keep model coordinates readable in generated JSON while avoiding floating
+// point noise from the sphere calculations.
+def roundModelNumber = { double value ->
+    double rounded = Math.round(value * 1000.0d) / 1000.0d
+    return Math.abs(rounded - Math.rint(rounded)) < 0.000001d ? (int) Math.rint(rounded) : rounded
+}
+
 tasks.register('generateBocchity') {
-    inputs.dir(imageDir)
+    inputs.dir(imageRoot)
     outputs.dir(generatedResourcesDir)
     outputs.dir(generatedSourcesDir)
 
@@ -67,93 +158,69 @@ tasks.register('generateBocchity') {
         File javaDir = new File(outSources, 'rocks/nijika/bocchity')
 
         [blockstates, blockModels, itemModels, textures, lang, lootTables, javaDir].each { it.mkdirs() }
+        imageCategories*.folder.each { it.mkdirs() }
 
-        List<Map<String, String>> images = []
-        imageDir.eachFile { File input ->
-            if (!input.isFile()) return
-            String lower = input.name.toLowerCase(Locale.ROOT)
-            if (!(lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg'))) return
+        List<Map<String, Object>> images = []
+        Set<String> usedIds = [] as Set
 
-            String rawName = input.name.substring(0, input.name.lastIndexOf('.'))
-            String id = rawName.toLowerCase(Locale.ROOT).replaceAll('[^a-z0-9_-]+', '_')
-            id = id.replaceAll('_+', '_').replaceAll('^-+|_+$', '')
-            if (!id) {
-                id = 'image'
-            }
-            if (!id.matches('[a-z0-9][a-z0-9_-]*')) {
-                id = 'image_' + id
-            }
-            if (images.any { it.id == id }) {
-                throw new GradleException("Duplicate block id '${id}' generated by '${input.name}'.")
-            }
-
-            File textureFile = new File(textures, "${id}.png")
-            BufferedImage bufferedImage
-            if (lower.endsWith('.png')) {
-                // Keep PNG input bytes untouched so the original texture is preserved.
-                java.nio.file.Files.copy(input.toPath(), textureFile.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
-                bufferedImage = javax.imageio.ImageIO.read(textureFile)
-                if (bufferedImage == null) {
-                    throw new GradleException("Could not decode PNG image '${input.name}'.")
+        imageCategories.each { category ->
+            imageFiles(category.folder).each { File input ->
+                String lower = input.name.toLowerCase(Locale.ROOT)
+                String rawName = input.name.substring(0, input.name.lastIndexOf('.'))
+                String id = normalizeBlockId(rawName)
+                if (!usedIds.add(id)) {
+                    throw new GradleException("Duplicate block id '${id}'. Names must be unique across images/full_blocks, images/transparent and images/sphere.")
                 }
-            } else {
-                // JPG/JPEG has no alpha channel and cannot be copied under a .png name.
-                // Decode it and explicitly encode a real PNG for Minecraft.
-                bufferedImage = javax.imageio.ImageIO.read(input)
+
+                BufferedImage bufferedImage = javax.imageio.ImageIO.read(input)
                 if (bufferedImage == null) {
-                    throw new GradleException("Could not decode image '${input.name}'. Supported formats: PNG, JPG, JPEG.")
+                    throw new GradleException("Could not decode image '${input}'. Supported formats: PNG, JPG, JPEG.")
                 }
-                if (!javax.imageio.ImageIO.write(bufferedImage, 'png', textureFile)) {
+
+                File textureFile = new File(textures, "${id}.png")
+                if (lower.endsWith('.png')) {
+                    java.nio.file.Files.copy(input.toPath(), textureFile.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                } else if (!javax.imageio.ImageIO.write(bufferedImage, 'png', textureFile)) {
                     throw new GradleException("Could not encode PNG texture for '${input.name}'.")
                 }
-            }
 
-            // Detect actual alpha, not merely the presence of an alpha-capable PNG format.
-            // Minecraft lighting is per block, so a transparent image block is made non-opaque
-            // as a whole. Polymer TRANSPARENT_BLOCK is then used so alpha=0 pixels are cut out
-            // visually, including when transparent image blocks are placed next to each other.
-            boolean hasTransparency = false
-            int height = bufferedImage.getHeight()
-            int width = bufferedImage.getWidth()
-            boolean foundTransparency = (0..<height).any { y ->
-                (0..<width).any { x ->
-                    (((bufferedImage.getRGB(x, y) >>> 24) & 0xFF) < 255)
+                int[] pixels = bufferedImage.getRGB(0, 0, bufferedImage.getWidth(), bufferedImage.getHeight(), null, 0, bufferedImage.getWidth())
+                boolean hasTransparency = pixels.any { (((it >>> 24) & 0xFF) < 255) }
+                boolean transparentRendering = category.name == 'transparent' || (category.name == 'sphere' && hasTransparency)
+
+                Map<String, Object> blockModel
+                if (category.name == 'sphere') {
+                    blockModel = sphereModel(id)
+                } else {
+                    blockModel = [
+                            parent: 'minecraft:block/cube_all',
+                            textures: [all: "bocchity:block/${id}"]
+                    ]
                 }
+
+                new File(blockModels, "${id}.json").setText(JsonOutput.prettyPrint(JsonOutput.toJson(blockModel)), 'UTF-8')
+                new File(blockstates, "${id}.json").setText(JsonOutput.prettyPrint(JsonOutput.toJson([
+                        variants: ['': [model: "bocchity:block/${id}"]]
+                ])), 'UTF-8')
+                new File(itemModels, "${id}.json").setText(JsonOutput.prettyPrint(JsonOutput.toJson([
+                        parent: "bocchity:block/${id}"
+                ])), 'UTF-8')
+                new File(lootTables, "${id}.json").setText(JsonOutput.prettyPrint(JsonOutput.toJson([
+                        type: 'minecraft:block',
+                        pools: [[
+                                rolls: 1,
+                                entries: [[type: 'minecraft:item', name: "bocchity:${id}"]],
+                                conditions: [[condition: 'minecraft:survives_explosion']]
+                        ]]
+                ])), 'UTF-8')
+
+                images << [
+                        id: id,
+                        name: displayNameFor(rawName),
+                        kind: category.name,
+                        transparent: transparentRendering
+                ]
             }
-            hasTransparency = foundTransparency
-
-            // cube_all means exactly the same texture is used on every face.
-            new File(blockModels, "${id}.json").setText(JsonOutput.prettyPrint(JsonOutput.toJson([
-                    parent: 'minecraft:block/cube_all',
-                    textures: [all: "bocchity:block/${id}"]
-            ])), 'UTF-8')
-
-            new File(blockstates, "${id}.json").setText(JsonOutput.prettyPrint(JsonOutput.toJson([
-                    variants: ['': [model: "bocchity:block/${id}"]]
-            ])), 'UTF-8')
-
-            // Block item uses the block model, so it shows as the textured cube.
-            new File(itemModels, "${id}.json").setText(JsonOutput.prettyPrint(JsonOutput.toJson([
-                    parent: "bocchity:block/${id}"
-            ])), 'UTF-8')
-
-            new File(lootTables, "${id}.json").setText(JsonOutput.prettyPrint(JsonOutput.toJson([
-                    type: 'minecraft:block',
-                    pools: [[
-                            rolls: 1,
-                            entries: [[type: 'minecraft:item', name: "bocchity:${id}"]],
-                            conditions: [[condition: 'minecraft:survives_explosion']]
-                    ]]
-            ])), 'UTF-8')
-
-            String displayName = rawName.replaceAll('[_-]+', ' ')
-                    .replaceAll('([a-z])([A-Z])', '$1 $2')
-                    .split(' ')*.trim()
-                    .findAll { !it.isEmpty() }
-                    .collect { it.substring(0, 1).toUpperCase(Locale.ROOT) + it.substring(1).toLowerCase(Locale.ROOT) }
-                    .join(' ')
-
-            images << [id: id, name: displayName ?: id, transparent: hasTransparency]
         }
 
         Map<String, String> translations = [:]
@@ -168,7 +235,6 @@ tasks.register('generateBocchity') {
         source.append('import net.minecraft.block.Blocks;\n')
         source.append('import net.minecraft.item.Item;\n')
         source.append('import net.minecraft.item.ItemGroups;\n')
-        source.append('import net.minecraft.item.Items;\n')
         source.append('import net.minecraft.registry.Registries;\n')
         source.append('import net.minecraft.registry.Registry;\n')
         source.append('import net.minecraft.util.Identifier;\n')
@@ -183,14 +249,15 @@ tasks.register('generateBocchity') {
         images.sort { a, b -> a.id <=> b.id }
         images.each { image ->
             String escaped = image.id.replace('\\', '\\\\').replace('"', '\\"')
-            source.append('        registerImage("').append(escaped).append('", ').append(image.transparent ? 'true' : 'false').append(');\n')
+            String kindEscaped = image.kind.replace('\\', '\\\\').replace('"', '\\"')
+            source.append('        registerImage("').append(escaped).append('", "').append(kindEscaped).append('", ').append(image.transparent ? 'true' : 'false').append(');\n')
         }
 
         source.append('    }\n\n')
-        source.append('    private static void registerImage(String path, boolean transparent) {\n')
+        source.append('    private static void registerImage(String path, String kind, boolean transparent) {\n')
         source.append('        Identifier id = Identifier.of(BocchityMod.MOD_ID, path);\n')
-        source.append('        ImageBlock block = Registry.register(Registries.BLOCK, id, new ImageBlock(\n')
-        source.append('                AbstractBlock.Settings.copy(Blocks.WHITE_WOOL), id, transparent));\n')
+        source.append('        AbstractBlock.Settings settings = AbstractBlock.Settings.copy(Blocks.WHITE_WOOL);\n')
+        source.append('        ImageBlock block = Registry.register(Registries.BLOCK, id, new ImageBlock(settings, id, kind, transparent));\n')
         source.append('        Item item = Registry.register(Registries.ITEM, id, new ImageBlockItem(block, id));\n')
         source.append('        ItemGroupEvents.modifyEntriesEvent(ItemGroups.BUILDING_BLOCKS).register(entries -> entries.add(item));\n')
         source.append('        BLOCKS.add(block);\n')
@@ -200,8 +267,8 @@ tasks.register('generateBocchity') {
         source.append('    }\n')
         source.append('}\n')
 
+        javaDir.mkdirs()
         new File(javaDir, 'GeneratedBocchityBlocks.java').setText(source.toString(), 'UTF-8')
-
 
         println("Bocchity: generated ${images.size()} custom block(s): ${images*.id}")
     }
@@ -209,6 +276,7 @@ tasks.register('generateBocchity') {
 
 tasks.register('verifyBocchityGeneration') {
     dependsOn(tasks.named('generateBocchity'))
+
     doLast {
         File outResources = generatedResourcesDir.get().asFile
         File assets = new File(outResources, 'assets/bocchity')
@@ -217,67 +285,54 @@ tasks.register('verifyBocchityGeneration') {
         File itemModels = new File(assets, 'models/item')
         File lootTables = new File(outResources, 'data/bocchity/loot_table/blocks')
         File textures = new File(assets, 'textures/block')
-        def parsed = imageDir.listFiles()
-                ?.findAll { it.isFile() }
-                ?.findAll { f ->
-                    def lower = f.name.toLowerCase(Locale.ROOT)
-                    lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg')
-                } ?: []
 
-        def ids = [] as Set
-        def idFor = { File input ->
-            def rawName = input.name.substring(0, input.name.lastIndexOf('.'))
-            def id = rawName.toLowerCase(Locale.ROOT).replaceAll('[^a-z0-9_-]+', '_')
-            id = id.replaceAll('_+', '_').replaceAll('^-+|_+$', '')
-            if (!id) {
-                id = 'image'
+        List<Map<String, String>> parsed = []
+        Set<String> ids = [] as Set
+        imageCategories.each { category ->
+            imageFiles(category.folder).each { File input ->
+                String rawName = input.name.substring(0, input.name.lastIndexOf('.'))
+                String id = normalizeBlockId(rawName)
+                if (!ids.add(id)) throw new GradleException("Duplicate generated id '${id}'.")
+                parsed << [id: id, kind: category.name]
             }
-            if (!id.matches('[a-z0-9][a-z0-9_-]*')) {
-                id = 'image_' + id
-            }
-            id
         }
 
-        parsed.each { File input ->
-            def id = idFor(input)
-            if (!ids.add(id)) throw new GradleException("Duplicate generated id '${id}'.")
-
+        parsed.each { image ->
+            String id = image.id
             File texture = new File(textures, "${id}.png")
             File blockModel = new File(blockModels, "${id}.json")
             File blockState = new File(blockstates, "${id}.json")
             File itemModel = new File(itemModels, "${id}.json")
             File lootTable = new File(lootTables, "${id}.json")
-
-            [texture, blockModel, blockState, itemModel, lootTable].each { f ->
-                if (!f.isFile() || f.length() == 0) {
-                    throw new GradleException("Missing generated file: ${f}")
-                }
+            [texture, blockModel, blockState, itemModel, lootTable].each { File f ->
+                if (!f.isFile() || f.length() == 0) throw new GradleException("Missing generated file: ${f}")
             }
-            if (javax.imageio.ImageIO.read(texture) == null) {
-                throw new GradleException("Generated texture is not a readable PNG: ${texture}")
-            }
+            if (javax.imageio.ImageIO.read(texture) == null) throw new GradleException("Generated texture is not readable: ${texture}")
 
             def blockModelJson = new groovy.json.JsonSlurper().parse(blockModel)
-            if (blockModelJson.parent != 'minecraft:block/cube_all' ||
-                    blockModelJson.textures?.all != "bocchity:block/${id}") {
+            if (image.kind == 'sphere') {
+                if (!(blockModelJson.elements instanceof List) || blockModelJson.elements.isEmpty()) {
+                    throw new GradleException("Sphere model '${id}' has no generated elements.")
+                }
+                if (blockModelJson.textures?.all != "bocchity:block/${id}") {
+                    throw new GradleException("Invalid sphere texture for '${id}'.")
+                }
+            } else if (blockModelJson.parent != 'minecraft:block/cube_all' || blockModelJson.textures?.all != "bocchity:block/${id}") {
                 throw new GradleException("Invalid cube_all model for '${id}'.")
             }
+
             def stateJson = new groovy.json.JsonSlurper().parse(blockState)
-            if (stateJson.variants?['']?.model != "bocchity:block/${id}") {
-                throw new GradleException("Invalid blockstate for '${id}'.")
-            }
+            if (stateJson.variants?['']?.model != "bocchity:block/${id}") throw new GradleException("Invalid blockstate for '${id}'.")
             def itemJson = new groovy.json.JsonSlurper().parse(itemModel)
-            if (itemJson.parent != "bocchity:block/${id}") {
-                throw new GradleException("Invalid item model for '${id}'.")
-            }
+            if (itemJson.parent != "bocchity:block/${id}") throw new GradleException("Invalid item model for '${id}'.")
             def lootJson = new groovy.json.JsonSlurper().parse(lootTable)
-            if (lootJson.type != 'minecraft:block' ||
-                    lootJson.pools?.size() != 1 ||
-                    lootJson.pools[0]?.entries?.size() != 1 ||
-                    lootJson.pools[0].entries[0]?.name != "bocchity:${id}") {
+            if (lootJson.type != 'minecraft:block' || lootJson.pools?.size() != 1 || lootJson.pools[0]?.entries?.size() != 1 || lootJson.pools[0].entries[0]?.name != "bocchity:${id}") {
                 throw new GradleException("Invalid block loot table for '${id}'.")
             }
         }
+
+        File generatedJava = new File(generatedSourcesDir.get().asFile, 'rocks/nijika/bocchity/GeneratedBocchityBlocks.java')
+        if (!generatedJava.isFile() || generatedJava.length() == 0) throw new GradleException("Missing generated Java registration source.")
 
         println("Bocchity generation verified: ${parsed.size()} image(s), ${ids.size()} unique block id(s).")
     }
@@ -305,6 +360,10 @@ tasks.named('build') {
     dependsOn(tasks.named('verifyBocchityGeneration'))
 }
 
+tasks.named('sourcesJar') {
+    dependsOn(tasks.named('generateBocchity'))
+}
+
 tasks.withType(JavaCompile).configureEach {
     options.release = 21
 }
@@ -314,10 +373,4 @@ java {
         languageVersion = JavaLanguageVersion.of(21)
     }
     withSourcesJar()
-}
-
-// Gradle 8.x validates task dependencies strictly. The generated source/resource
-// directories are consumed by sourcesJar, so make the relationship explicit.
-tasks.named('sourcesJar') {
-    dependsOn(tasks.named('generateBocchity'))
 }
